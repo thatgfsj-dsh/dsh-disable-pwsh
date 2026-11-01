@@ -9,9 +9,19 @@
 #    顶层 patch 够不到，由 index.js 的 Host 插件在 agent 创建时用
 #    `tools.restrict({ deny: ['pwsh'] })` 移除。web-app 已经把宿主平面的
 #    `tool-pwsh` 行禁用，下面这行在那里是幂等的。
+#
+# 注：`@deepseek-ai/dsh-tool-pwsh-persistent` 那条行（id 是 `persistent-pwsh`）
+# 只出现在独立的 `dsh-sdk-minimal` bundle 和 web 的 `minimal` 预设里。顶层 patch
+# 够不到预设里的行，而 `dsh-sdk-minimal` 不是一个常规 profile，所以这里不写
+# `persistent-pwsh`：写了只会在其它 profile 里留下一条 "entry not found" 警告。
+# 那个 bundle 上仍然由运行时那半边兜底 —— `pwsh` 一样从工具目录里消失，只是工具
+# 自带的提示词小节还可能留在系统提示里。
 - id: tool-pwsh
   disabled: true
 
+# 本插件自己的 Host 插件行（运行时那半边）。
+# id 只是 patch 的寻址键；loader 对重复 id 不查重，后一行会静默覆盖前一行，
+# 所以这里用与包名一致的 id，撞名概率最低。
 - insert:
-    - id: disable-pwsh
+    - id: dsh-disable-pwsh
       name: dsh-disable-pwsh

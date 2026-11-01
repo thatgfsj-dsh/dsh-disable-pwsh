@@ -1,6 +1,11 @@
 /**
  * `dsh-disable-pwsh` 的单元测试：用假 ctx 覆盖「何时移除 / 何时不动 / 失败怎么办」。
  *
+ * 假 harness 复现了真实 `restrict` 的两条关键语义：
+ *   1) restriction 落层后，该 agent 的工具目录里就没有 pwsh 了；
+ *   2) `restrict()` 会**同步** emit `tools/change`（ScopedLayers.onChange），
+ *      于是插件自己的处理器会被重入 —— 幂等与递归都要靠这个语义来验。
+ *
  * 这些用例不依赖真实 DSH 安装；真实组合下的行为由 `scripts/smoke.mjs` 验证。
  */
 import assert from 'node:assert/strict'
@@ -10,8 +15,8 @@ import { apply, inject, name as pluginName } from '../index.js'
 
 /**
  * 造一个最小的假 Context：事件表、effect 栈、tools/agents 服务与 logger。
- * @param {{ visible?: Set<object>, restrictImpl?: Function, agents?: object[] }} [options] - 定制点。
- * @returns {{ ctx: object, emit: Function, warnings: string[], restrictions: object[], teardown: Function, effects: Function[] }} - 测试句柄。
+ * @param {{ visible?: Set<object>, restrictImpl?: Function, agents?: object[], getImpl?: Function }} [options] - 定制点。
+ * @returns {object} 测试句柄。
  */
 function createHarness(options = {}) {
   const listeners = new Map()
@@ -21,12 +26,26 @@ function createHarness(options = {}) {
   const visible = options.visible ?? new Set()
   const agents = options.agents ?? []
   const restrictCalls = []
+  const listenerOptions = new Map()
+  let depth = 0
+  let maxDepth = 0
+
+  const emit = (event, payload) => {
+    depth += 1
+    maxDepth = Math.max(maxDepth, depth)
+    try {
+      for (const entry of listeners.get(event) ?? []) entry.handler(payload)
+    } finally {
+      depth -= 1
+    }
+  }
 
   const ctx = {
-    on(event, handler) {
+    on(event, handler, opts) {
       const list = listeners.get(event) ?? []
-      list.push(handler)
+      list.push({ handler, opts })
       listeners.set(event, list)
+      listenerOptions.set(event, opts)
     },
     effect(effect) {
       const disposer = effect()
@@ -35,6 +54,7 @@ function createHarness(options = {}) {
     },
     tools: {
       get(toolName, agent) {
+        if (options.getImpl !== undefined) return options.getImpl(toolName, agent)
         if (toolName !== 'pwsh') return undefined
         return visible.has(agent) ? { name: 'pwsh' } : undefined
       },
@@ -57,6 +77,10 @@ function createHarness(options = {}) {
           restrict(filter) {
             if (options.restrictImpl !== undefined) return options.restrictImpl(filter, agent)
             restrictCalls.push(filter)
+            // 真实语义 1：restriction 落层 → 该 agent 看不到 pwsh 了。
+            visible.delete(agent)
+            // 真实语义 2：落层会同步 emit tools/change，插件自己的处理器被重入。
+            emit('tools/change', {})
             const disposer = () => {}
             restrictions.push(disposer)
             return disposer
@@ -66,10 +90,6 @@ function createHarness(options = {}) {
     }
     visible.add(agent)
     return agent
-  }
-
-  const emit = (event, payload) => {
-    for (const handler of listeners.get(event) ?? []) handler(payload)
   }
 
   const teardown = () => {
@@ -87,12 +107,25 @@ function createHarness(options = {}) {
     makeAgent,
     agents,
     visible,
+    listenerOptions,
+    get maxDepth() {
+      return maxDepth
+    },
   }
 }
 
 test('插件导出契约：名字与 inject', () => {
   assert.equal(pluginName, 'disable-pwsh')
   assert.deepEqual(inject, ['tools', 'agents'])
+})
+
+test('三个监听器都带 global 选项（不被 scope 过滤，覆盖全部 agent）', () => {
+  const harness = createHarness()
+  apply(harness.ctx)
+
+  for (const event of ['agent/created', 'agent/disposed', 'tools/change']) {
+    assert.deepEqual(harness.listenerOptions.get(event), { global: true }, event)
+  }
 })
 
 test('新 agent 可见 pwsh 时，按 deny 名单移除一次', () => {
@@ -131,10 +164,10 @@ test('pwsh 不可见时不动手（避免 unknown-tool 抛错）', () => {
 
 test('工具在 agent 创建后才出现时，由 tools/change 补上移除', () => {
   const harness = createHarness()
+  apply(harness.ctx)
   const agent = harness.makeAgent()
   harness.visible.delete(agent)
   harness.agents.push(agent)
-  apply(harness.ctx)
 
   assert.deepEqual(harness.restrictCalls, [])
 
@@ -163,6 +196,23 @@ test('restrict 抛错只记 warning，不让 agent 创建失败，并在下次�
 
   harness.emit('tools/change', {})
   assert.equal(attempts, 2)
+})
+
+test('tools 服务不可用时也不让 agent 创建失败（异常不冒泡进串行派发）', () => {
+  const harness = createHarness({
+    getImpl() {
+      throw new Error('cannot get required service "tools" in inactive context')
+    },
+  })
+  apply(harness.ctx)
+
+  const agent = harness.makeAgent()
+  harness.agents.push(agent)
+
+  assert.doesNotThrow(() => harness.emit('agent/created', { agent }))
+  assert.equal(harness.warnings.length, 1)
+  assert.match(harness.warnings[0], /inactive context/)
+  assert.deepEqual(harness.restrictCalls, [])
 })
 
 test('插件卸载时回收所有 restriction', () => {
@@ -202,14 +252,36 @@ test('插件加载时补禁用已存在的会话', () => {
   assert.deepEqual(harness.restrictCalls, [{ deny: ['pwsh'] }])
 })
 
-test('agent 销毁后释放记录，重建的同对象还能再次禁用', () => {
+test('agent 销毁后释放记录，pwsh 再次可见时还能禁用', () => {
   const harness = createHarness()
   apply(harness.ctx)
 
   const agent = harness.makeAgent()
   harness.emit('agent/created', { agent })
+  assert.equal(harness.restrictCalls.length, 1)
+
   harness.emit('agent/disposed', { agent })
 
+  // 新的一轮：pwsh 又可见了（restriction 随 agent 的 scope 一起没了）。
+  harness.visible.add(agent)
   harness.emit('agent/created', { agent })
   assert.equal(harness.restrictCalls.length, 2)
+})
+
+test('多个会话同时需要禁用时每个只禁一次，restrict 的同步重入不递归', () => {
+  const harness = createHarness()
+  apply(harness.ctx)
+
+  const agents = [harness.makeAgent(), harness.makeAgent(), harness.makeAgent()]
+  for (const agent of agents) harness.emit('agent/created', { agent })
+
+  assert.equal(harness.restrictCalls.length, 3)
+
+  // 再来一轮变更：仍然幂等。
+  harness.emit('tools/change', {})
+  assert.equal(harness.restrictCalls.length, 3)
+
+  // 嵌套深度：agent/created → restrict → tools/change → disableEverywhere，
+  // 不该再往下钻（否则每个会话一层，N 个会话就是 N 层递归）。
+  assert.ok(harness.maxDepth <= 3, `嵌套深度过大：${harness.maxDepth}`)
 })

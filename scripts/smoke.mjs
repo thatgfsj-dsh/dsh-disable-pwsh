@@ -60,8 +60,8 @@ const overlays = {
   // 对照组：只有假 pwsh 工具 + 探针，必须看到 present。
   control: `- insert:\n${stubRow}${probeRow}`,
   // 插件在场：假 pwsh 工具必须被移除。
-  // 插件行必须排在探针之前：agent/created 是串行派发，监听器按注册顺序执行，
-  // 探针才能观察到「restriction 已经生效」的状态。
+  // 探针用 setImmediate 延后读取可见性，所以这里不再依赖「插件行排在探针行之前」
+  // 这个注册顺序假设（DSH 不保证行的激活顺序）。
   plugin: `- insert:\n${stubRow}${pluginRow}${probeRow}`,
   // 没有 pwsh 时插件不能因为 unknown-tool 抛错。
   'no-tool': `- insert:\n${pluginRow}${probeRow}`,
@@ -78,9 +78,9 @@ const files = Object.fromEntries(
 )
 
 /**
- * 跑一次 dsh headless，返回合并输出与探针报告。
+ * 跑一次 dsh headless，返回合并输出与全部探针报告。
  * @param {string} overlayFile - --patch 叠加层。
- * @returns {{ output: string, pwsh: string | undefined }} 结果。
+ * @returns {{ output: string, states: string[] }} 结果。
  */
 function runCase(overlayFile) {
   const args = [
@@ -98,8 +98,10 @@ function runCase(overlayFile) {
     timeout: 180_000,
   })
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
-  const match = output.match(/\[probe\] agent=\S+ pwsh=(present|absent)/)
-  return { output, pwsh: match?.[1] }
+  // 断言**全部**探针行：一次运行可能创建多个 agent（起始 agent / 子代理），
+  // 只看第一条会漏判。
+  const states = [...output.matchAll(/\[probe\] agent=\S+ pwsh=(present|absent)/g)].map((m) => m[1])
+  return { output, states }
 }
 
 const cases = [
@@ -111,11 +113,11 @@ const cases = [
 
 let failed = 0
 for (const [name, expected, why] of cases) {
-  const { output, pwsh } = runCase(files[name])
-  const pass = pwsh === expected
+  const { output, states } = runCase(files[name])
+  const pass = states.length > 0 && states.every((state) => state === expected)
   const detail = pass
     ? ''
-    : `\n  期望 pwsh=${expected}，实际=${pwsh ?? '(没有探针输出)'}\n  输出尾部：\n${output.split('\n').slice(-12).join('\n')}`
+    : `\n  期望所有探针行都是 pwsh=${expected}，实际=[${states.join(', ') || '(没有探针输出)'}]\n  输出尾部：\n${output.split('\n').slice(-12).join('\n')}`
   console.log(`${pass ? '✔' : '✖'} ${name}: ${why}${detail}`)
   if (!pass) failed += 1
 }

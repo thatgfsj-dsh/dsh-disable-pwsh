@@ -1,6 +1,6 @@
 {
   "name": "dsh-disable-pwsh",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "无条件禁用 DeepSeek Harness 的 pwsh 工具：不挑平台、不挑预设、不挑会话。",
   "license": "MIT",
@@ -16,6 +16,7 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
+    "docs/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -30,7 +31,8 @@
   },
   "scripts": {
     "test": "node --test tests/plugin.test.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "screenshot": "node scripts/screenshot.mjs"
   },
   "repository": {
     "type": "git",
