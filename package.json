@@ -1,0 +1,44 @@
+{
+  "name": "dsh-disable-pwsh",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "无条件禁用 DeepSeek Harness 的 pwsh 工具：不挑平台、不挑预设、不挑会话。",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test tests/plugin.test.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thatgfsj-dsh/dsh-disable-pwsh.git"
+  },
+  "homepage": "https://github.com/thatgfsj-dsh/dsh-disable-pwsh",
+  "bugs": {
+    "url": "https://github.com/thatgfsj-dsh/dsh-disable-pwsh/issues"
+  },
+  "private": false
+}
