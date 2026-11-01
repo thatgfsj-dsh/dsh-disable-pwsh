@@ -1,0 +1,17 @@
+# dsh-disable-pwsh 的 bundle patch。
+#
+# 两层禁用，覆盖两种工具行所在平面：
+#
+# 1) 宿主平面：base（以及 headless / acp / sdk 等直接组合工具行的 profile）把
+#    `tool-pwsh` 作为顶层行插入，本层直接把它关掉 —— win32 上连工具注册都不会
+#    发生，工具插件附带的提示词小节也不会出现。
+# 2) 预设平面：web profile 里工具行挂在 Agent 预设里（`config.plugins` 数组），
+#    顶层 patch 够不到，由 index.js 的 Host 插件在 agent 创建时用
+#    `tools.restrict({ deny: ['pwsh'] })` 移除。web-app 已经把宿主平面的
+#    `tool-pwsh` 行禁用，下面这行在那里是幂等的。
+- id: tool-pwsh
+  disabled: true
+
+- insert:
+    - id: disable-pwsh
+      name: dsh-disable-pwsh
