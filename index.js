@@ -15,6 +15,12 @@
  * 烂。所以宿主平面的行禁用交给 `cordis.patch.yml`（顶层行可以直接 `disabled`），
  * 预设平面（web）的行由本插件的运行时 restriction 兜底。
  *
+ * 前提：`pwsh` 由工具插件注册在**全局层**（`dsh-tool-pwsh` 与
+ * `dsh-tool-pwsh-persistent` 都注册这个名字）。`restrict` 只能过滤继承来的工具，
+ * 对某个 scope 自己那一层注册的工具无效——若哪天上游改成把 `pwsh` 注册进 agent
+ * 自己的层，本插件的 restriction 会被 `restrict` 的 unknown-tool 校验挡下，
+ * 此时只会留下一条 warning，而 `pwsh` 依然可见。
+ *
  * @module dsh-disable-pwsh
  */
 
@@ -32,18 +38,32 @@ export const inject = ['tools', 'agents']
  * @param ctx - 插件上下文。
  */
 export function apply(ctx) {
-  /** agent → 该 agent 上这次 restriction 的 disposer。 */
+  /** agent → 该 agent 上这次 restriction 的 disposer（禁用中的占位为 `null`）。 */
   const restrictions = new Map()
 
-  /** 让一个 agent 的工具目录里不再有 `pwsh`（幂等）。 */
+  /** 扫描是否正在进行中（`restrict` 会同步触发 `tools/change`，需要防重入）。 */
+  let sweeping = false
+
+  /**
+   * 让一个 agent 的工具目录里不再有 `pwsh`（幂等）。
+   *
+   * 这里的所有语句都必须自己吞掉异常：`agent/created` 是串行派发，监听器抛错会
+   * 顺着 `announce()` → `publish()` 冒泡出去，直接让会话创建失败。
+   * @param agent - 目标 agent。
+   */
   const disableFor = (agent) => {
     if (restrictions.has(agent)) return
-    // 工具不可见时（非 win32、预设已关闭、或根本没装 shell 执行器）不能调用
-    // restrict：它会对未知工具名抛错，从而让整个 agent/created 监听器失败。
-    if (ctx.tools.get(TOOL_NAME, agent) === undefined) return
     try {
-      restrictions.set(agent, agent.ctx.tools.restrict({ deny: [TOOL_NAME] }))
+      // 工具不可见时（非 win32、预设已关闭、或根本没装 shell 执行器）不能调用
+      // restrict：它会对未知工具名抛错。
+      if (ctx.tools.get(TOOL_NAME, agent) === undefined) return
+      // 先占位再调用：restrict() 会同步 emit `tools/change`，重入时若还没占位，
+      // 同一个 agent 会被重复禁用（递归 + O(N²)）。
+      restrictions.set(agent, null)
+      const dispose = agent.ctx.tools.restrict({ deny: [TOOL_NAME] })
+      restrictions.set(agent, dispose)
     } catch (error) {
+      restrictions.delete(agent)
       ctx.logger.warn(
         `dsh-disable-pwsh: 无法为会话 ${agent.id} 禁用 ${TOOL_NAME}：${error?.message ?? error}`,
       )
@@ -52,19 +72,43 @@ export function apply(ctx) {
 
   /** 覆盖所有活着的 agent（热加载、预设切换、工具后注册都会走到这里）。 */
   const disableEverywhere = () => {
-    for (const agent of ctx.agents.list()) disableFor(agent)
+    if (sweeping) return
+    sweeping = true
+    try {
+      for (const agent of ctx.agents.list()) disableFor(agent)
+    } catch (error) {
+      ctx.logger.warn(`dsh-disable-pwsh: 扫描会话失败：${error?.message ?? error}`)
+    } finally {
+      sweeping = false
+    }
   }
 
-  // restriction 同时由 agent.ctx 拥有；插件自己再持一份 disposer，才能覆盖
-  // 「插件先卸载」与「agent 先销毁」两种回收顺序。
+  // restriction 本身归 agent.ctx 的 fiber 所有：agent 先销毁时由它回收，插件这边
+  // 的 disposer 不会也不必再调用；插件先卸载时则由下面的 effect 兜底回收。
   ctx.effect(() => () => {
-    for (const dispose of restrictions.values()) dispose()
+    for (const dispose of restrictions.values()) dispose?.()
     restrictions.clear()
   })
 
-  ctx.on('agent/created', ({ agent }) => disableFor(agent))
-  ctx.on('agent/disposed', ({ agent }) => restrictions.delete(agent))
-  ctx.on('tools/change', disableEverywhere)
+  // `global: true`：即使本插件被写进某个预设的 config.plugins，监听器也不会被
+  // scope 过滤掉，仍然覆盖全部 agent。
+  ctx.on(
+    'agent/created',
+    ({ agent }) => {
+      try {
+        disableFor(agent)
+      } catch (error) {
+        ctx.logger.warn(`dsh-disable-pwsh: 处理新会话失败：${error?.message ?? error}`)
+      }
+    },
+    { global: true },
+  )
+  ctx.on(
+    'agent/disposed',
+    ({ agent }) => restrictions.delete(agent),
+    { global: true },
+  )
+  ctx.on('tools/change', disableEverywhere, { global: true })
 
   // 插件在会话已存在之后才加载（热更新、后装）时，也要补上禁用。
   disableEverywhere()

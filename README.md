@@ -4,6 +4,14 @@
 
 > DSH 自带的 `tool-pwsh` 行用平台条件开关：`disabled: !!js process.platform !== 'win32'`。也就是说在 Windows（以及 Wine 里跑的 Windows Node）上，会话默认会拿到 `pwsh` 工具。本插件把它从模型可见的工具目录里移除——不管你在 Linux、macOS 还是 Windows，也不管会话用的是 `standard`、`cordis` 还是自建预设。
 
+![插件已安装](docs/images/plugin-installed.png)
+
+*装好之后：侧栏「插件」面板 → 已安装插件里出现「禁用 pwsh」。*
+
+![插件库存里的 tool-pwsh](docs/images/plugin-inventory-tool-pwsh.png)
+
+*设置 → 内置插件 → `tool-pwsh` 卡片：完整名称 `@deepseek-ai/dsh-tool-pwsh`、来自「标准模式」、配置状态与禁用条件一目了然（Windows 上这一行原本是启用的，正是本插件要压住的那半边）。*
+
 ## 它做了什么
 
 DSH 的工具有两个平面，本插件两层都管：
@@ -20,6 +28,7 @@ DSH 的工具有两个平面，本插件两层都管：
 - 插件热更新/后装时，**已经活着的会话**也会补上禁用（`ctx.agents.list()`）。
 - 预设切换、工具后注册会触发 `tools/change`，插件会重试；已经禁用的会话不会重复注册。
 - `pwsh` 本来就不存在时（非 win32、预设已关、没装 shell 执行器）**什么都不做**——不会因为 unknown-tool 抛错拖垮会话创建。
+- 任何异常都被插件自己吞掉并记 warning，**绝不会**顺着 `agent/created` 的串行派发冒泡出去把会话创建搞挂。
 - 只禁用 `pwsh`；`bash`、`job_*`、文件工具等一概不碰。
 
 ## 安装
@@ -32,7 +41,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-disable-pwsh
 
 # tarball
 pnpm pack
-dsh plugin --profile web add /absolute/path/to/dsh-disable-pwsh-0.1.0.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-disable-pwsh-0.1.1.tgz
 ```
 
 装完**重启** `dsh web`（宿主行与 bundle patch 在启动时组合）。
@@ -56,10 +65,10 @@ dsh plugin --profile web remove dsh-disable-pwsh
 
 ## 验证
 
-三级验证，全部可离线跑（不需要模型凭据——会话创建完成后的第一次请求会失败，这是预期，断言发生在 `agent/created`）：
+四级验证，全部可离线跑（不需要模型凭据——会话创建完成后的第一次请求会失败，这是预期，断言发生在 `agent/created`）：
 
 ```bash
-# 1) 单元测试：何时移除 / 何时不动 / 失败怎么办（9 项）
+# 1) 单元测试：何时移除 / 何时不动 / 失败怎么办（12 项）
 node --test tests/plugin.test.mjs
 
 # 2) 真实 DSH 冒烟（临时 DSH_HOME + headless profile，4 项）
@@ -68,6 +77,10 @@ node scripts/smoke.mjs
 # 3) 装进 profile 后看组合树：应出现 "# == dsh-disable-pwsh" 与
 #    "- id: tool-pwsh ... disabled: true"（带 "patched by dsh-disable-pwsh" 标注）
 dsh --profile web --dump-config | grep -B2 -A3 "dsh-disable-pwsh"
+
+# 4) 实机截图：自建临时实例（独立 DSH_HOME + 端口 3099，不碰主端口 3080），
+#    用 headless Chrome 截「插件库存里的 tool-pwsh」与「已安装插件」两张图
+node scripts/screenshot.mjs
 ```
 
 Wine / 真 Windows 上还额外验证过「真实 `pwsh` 工具（不是假工具）被移除」，命令与结果见 [docs/verification.md](docs/verification.md)。
@@ -75,7 +88,9 @@ Wine / 真 Windows 上还额外验证过「真实 `pwsh` 工具（不是假工�
 ## 已知边界
 
 - **插件库存卡片不会变成「已停用」**：卡片展示的是预设行自身的 `config.disabled`（win32 上原本就是启用、无禁用条件）。本插件在运行时移除工具，不改预设配置。想让卡片也显示已停用，只能整份覆盖预设行，代价是上游预设一升级就失配——不建议。
-- **web 预设平面**（预设行）里，工具插件注册的短提示词小节（例如「非零退出码」那条）仍会出现在系统提示里。它描述的是退出码语义，不会误导模型去调不存在的工具；想要它一起消失只能在预设层关行（同上一條的代价）。宿主平面没有这个问题——行被禁用后小节根本不注册。
+- **web 预设平面**（预设行）里，工具插件注册的短提示词小节（例如「非零退出码」那条）仍会出现在系统提示里。它描述的是退出码语义，不会误导模型去调不存在的工具；想要它一起消失只能在预设层关行（同上一条的代价）。宿主平面没有这个问题——行被禁用后小节根本不注册。
+- **`dsh-sdk-minimal` 这类独立 bundle**：`@deepseek-ai/dsh-tool-pwsh-persistent` 那条行（id `persistent-pwsh`）只存在于它和 web 的 `minimal` 预设里，顶层 patch 够不到预设里的行。所以本插件没有写这条 patch（写了只会在其它 profile 留下一条 “entry not found” 警告）；那个 bundle 上由运行时那半边兜底——`pwsh` 一样从工具目录里消失，只是工具自带的提示词小节还可能留在系统提示里。
+- **关掉 `agent` 服务行会让本插件整体不激活**：插件需要 `tools` 与 `agents` 两个服务；在 Web 的「内置插件」里把 `agent` 行关掉后，插件静默不运行（只剩声明式那半边）。这是 cordis 的语义：服务没就绪，插件的 `apply` 不会跑。
 - 工具名固定为 `pwsh`（`@deepseek-ai/dsh-tool-pwsh` 与 `@deepseek-ai/dsh-tool-pwsh-persistent` 都注册这个名字）。
 - 本插件不处理 `pwsh-sandbox` 执行器本身：禁用工具的职责止于工具目录，执行器是别的插件的事。
 
