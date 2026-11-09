@@ -1,5 +1,16 @@
 # 更新日志
 
+## v0.1.2（2026-11-10）
+
+适配 DSH 0.2.2-rc.1（跨 minor 升级的兼容性回归）+ 修复现状调查发现的文档/资产问题。
+
+- **兼容性核对**：逐行 diff `0.2.1-rc.2 → 0.2.2-rc.1` 安装产物 —— `tools.restrict()` / `view()` / `get()` 函数体逐字相同；`agent/created` 仍是 `ctx.serial(...)` 串行派发（监听器异常仍会让会话创建失败，插件的 try/catch 兜底保留）；`agent/disposed`、`agents.list()`、`tools/change`、监听器 `{ global: true }` 均未变；`dsh-base` 与 web `standard`/`cordis`/`ptc`/`minimal` 预设里的 `tool-pwsh`/`persistent-pwsh` 行、工具名 `pwsh` 与提示词小节文案也未变。**代码无需改动**。
+- **回归**：Linux（0.2.2-rc.1）单测 12/12、真实 DSH 冒烟 4/4、目录与 tarball 安装 + 组合树、安装态探针 `pwsh=absent`、截图脚本全过；Wine/win32（Windows DSH 0.2.2-rc.1）六组用例全过（对照 `present`，插件行/声明式/无工具均 `absent`，手工安装形态默认与强制启用也 `absent`）。详见 `docs/verification.md`。
+- **文档修复**：README 验证第 3 步改为 `--profile headless` —— web 层里 `tool-pwsh` 已被 `@deepseek-ai/dsh-web-app` 置为 `disabled: true`，本插件 patch 写入相同值，组合树不会记录 `patched by dsh-disable-pwsh` 归属（v0.1.1 的断言不成立）；同时补上 web 下的正确检查方式，以及 0.2.2-rc.1 上 win32 `dsh plugin add` 的 pnpm 路径 bug 仍复现、手工安装兜底已验证。
+- **资产修复**：重拍 `docs/images/plugin-installed.png`（旧图内容是插件库存卡片，不是本插件卡片）与 `plugin-inventory-tool-pwsh.png`（0.2.2 UI）。
+- **截图脚本加固**：`scripts/screenshot.mjs` 不再假定「预览版说明」弹窗一定在页面骨架就绪时已经挂载 —— 改成连续一段时间看不到「继续」才算关闭，并在重试账号菜单前再清一次，消除实测偶发的「设置按钮超时」失败。
+- **英文文案**：`locale/en.json` 改为英文，英文界面不再显示中文标题/描述。
+
 ## v0.1.1（2026-11-02）
 
 发布前加固（对抗性代码复核后的修复）+ 实机截图。

@@ -153,19 +153,50 @@ try {
     )
     console.log('· Web UI 就绪')
 
-    // 预览版说明。
-    await evaluate(
-      page,
-      `(() => { const b=[...document.querySelectorAll('button')].find(x=>((x.getAttribute('aria-label')||x.textContent||'').trim())==='继续'); if(b) b.click(); return 1 })()`,
-    )
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    // 预览版说明：弹窗可能比页面骨架晚一点挂载，不能只点一次就假定关掉了。
+    // 这里要求「连续一段时间看不到『继续』」才算关闭，避免弹窗晚到把后面的
+    // 账号菜单与「设置」按钮挡住（实测偶发：点早了 → 弹窗仍在 → 设置超时）。
+    const hasPreviewDismiss = () =>
+      evaluate(
+        page,
+        `!![...document.querySelectorAll('button')].find(x => ((x.getAttribute('aria-label') || x.textContent || '').trim()) === '继续')`,
+      )
+    const dismissPreview = async (timeoutMs = 20000) => {
+      const deadline = Date.now() + timeoutMs
+      let absentStreak = 0
+      while (Date.now() < deadline && absentStreak < 5) {
+        if ((await hasPreviewDismiss()) === true) {
+          absentStreak = 0
+          await evaluate(
+            page,
+            `(() => { const b=[...document.querySelectorAll('button')].find(x=>((x.getAttribute('aria-label')||x.textContent||'').trim())==='继续'); if(b) b.click(); return 1 })()`,
+          )
+          await new Promise((resolve) => setTimeout(resolve, 500))
+        } else {
+          absentStreak += 1
+          await new Promise((resolve) => setTimeout(resolve, 400))
+        }
+      }
+    }
+    await dismissPreview()
 
     // —— 图 1：设置 → 内置插件 → 展开 tool-pwsh 卡片 ——
-    await evaluate(
-      page,
-      `(() => { const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||'').includes('账号菜单')); if(b) b.click(); return 1 })()`,
-    )
-    await waitAndClick('设置')
+    // 账号菜单偶尔要等头像渲染完才会出现；一次没打开「设置」就重开菜单重试。
+    let settingsOpened = false
+    for (let attempt = 0; attempt < 3 && !settingsOpened; attempt += 1) {
+      await dismissPreview(3000)
+      await evaluate(
+        page,
+        `(() => { const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||'').includes('账号菜单')); if(b) b.click(); return 1 })()`,
+      )
+      try {
+        await waitAndClick('设置', 12000)
+        settingsOpened = true
+      } catch (error) {
+        if (attempt === 2) throw error
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+      }
+    }
     await new Promise((resolve) => setTimeout(resolve, 2500))
     await waitAndClick('内置插件')
     await new Promise((resolve) => setTimeout(resolve, 4500))
