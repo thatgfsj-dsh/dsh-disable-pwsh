@@ -33,7 +33,7 @@ DSH 的工具有两个平面，本插件两层都管：
 
 ## 安装
 
-要求 DSH `>= 0.2.1-rc.2 < 0.3.0-0`（`engines.dsh`）。
+要求 DSH `>= 0.2.1-rc.2 < 0.3.0-0`（`engines.dsh`）。已实测 `0.2.1-rc.2`（v0.1.0 / v0.1.1）与 `0.2.2-rc.1`（v0.1.2，Linux + Wine/win32 两端），证据见 [docs/verification.md](docs/verification.md)。
 
 ```bash
 # 本地目录（开发时推荐：改完文件重启 dsh 即可，不用重装）
@@ -41,12 +41,12 @@ dsh plugin --profile web add /absolute/path/to/dsh-disable-pwsh
 
 # tarball
 pnpm pack
-dsh plugin --profile web add /absolute/path/to/dsh-disable-pwsh-0.1.1.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-disable-pwsh-0.1.2.tgz
 ```
 
 装完**重启** `dsh web`（宿主行与 bundle patch 在启动时组合）。
 
-Windows / Wine 注意：`dsh plugin add` 依赖插件管理器解析 `pnpm`。DSH `0.2.1-rc.2` 在 win32 上存在 pnpm 路径拼接问题（`C:\node24\\node_modules\pnpm\pnpm` 找不到），若命令失败，可手工放置：
+Windows / Wine 注意：`dsh plugin add` 依赖插件管理器解析 `pnpm`。DSH `0.2.1-rc.2` 与 `0.2.2-rc.1` 在 win32 上**都存在**这个 pnpm 路径拼接问题（把 `pnpm` 拼成 `C:\node24\\node_modules\pnpm\pnpm`，报“不是内部或外部命令”；0.2.2-rc.1 上实测仍复现），若命令失败，可手工放置（0.2.2-rc.1 上已验证有效）：
 
 ```bat
 :: 1) 把仓库拷进 profile 的 node_modules（路径按你的 DSH_HOME 改）
@@ -74,16 +74,21 @@ node --test tests/plugin.test.mjs
 # 2) 真实 DSH 冒烟（临时 DSH_HOME + headless profile，4 项）
 node scripts/smoke.mjs
 
-# 3) 装进 profile 后看组合树：应出现 "# == dsh-disable-pwsh" 与
-#    "- id: tool-pwsh ... disabled: true"（带 "patched by dsh-disable-pwsh" 标注）
-dsh --profile web --dump-config | grep -B2 -A3 "dsh-disable-pwsh"
+# 3) 装进 profile 后看组合树。用 headless 看声明式半边：base 的 tool-pwsh 行原本是
+#    平台条件表达式，被本插件的 patch 改写成字面量 disabled: true，组合树才会记归属：
+#    "# == @deepseek-ai/dsh-base, patched by dsh-disable-pwsh" + "- id: tool-pwsh ... disabled: true"
+dsh --profile headless --dump-config | grep -B2 -A3 "tool-pwsh"
+
+#    web profile 里这行在 bundle 层已被 @deepseek-ai/dsh-web-app 置为 disabled: true，
+#    本插件 patch 写入相同值 → 组合树不记录归属（属预期）；只需确认末尾是本插件的行：
+dsh --profile web --dump-config | tail -3
 
 # 4) 实机截图：自建临时实例（独立 DSH_HOME + 端口 3099，不碰主端口 3080），
 #    用 headless Chrome 截「插件库存里的 tool-pwsh」与「已安装插件」两张图
 node scripts/screenshot.mjs
 ```
 
-Wine / 真 Windows 上还额外验证过「真实 `pwsh` 工具（不是假工具）被移除」，命令与结果见 [docs/verification.md](docs/verification.md)。
+Wine / 真 Windows 上还额外验证过「真实 `pwsh` 工具（不是假工具）被移除」，DSH `0.2.2-rc.1` 上的六组用例（对照 / 插件行 / host-row / 无工具 / 手工安装两侧）与命令见 [docs/verification.md](docs/verification.md)。
 
 ## 已知边界
 

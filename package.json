@@ -1,6 +1,6 @@
 {
   "name": "dsh-disable-pwsh",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "无条件禁用 DeepSeek Harness 的 pwsh 工具：不挑平台、不挑预设、不挑会话。",
   "license": "MIT",

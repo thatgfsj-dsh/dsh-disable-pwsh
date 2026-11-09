@@ -1,13 +1,62 @@
 # 验证记录
 
-环境：
+对应版本：**v0.1.2（当前）** 与 v0.1.0 / v0.1.1（历史）。
 
-- **Linux**：Fedora + Node `v24.21.0` + DSH `0.2.1-rc.2`（`~/.npm-global` 安装，全局 CLI `dsh`）。
-- **Wine / win32**：Wine（`~/.wine-nodetest` 前缀）+ Windows Node `24.21.0`（`C:\node24\node.exe`）+ Windows DSH `0.2.1-rc.2`（`C:\npm-global\node_modules\@deepseek-ai\dsh`）。
+当前环境（v0.1.2 回归）：
 
-> Wine 侧全部跑在**独立 DSH_HOME**（`Z:\home\...\.scratch-pwsh\wine-home*`）里，没有碰机器上另一个正在使用的 DSH 实例与其 `C:\dsh-test-home`。
+- **Linux**：Fedora + Node `v24.21.0` + DSH `0.2.2-rc.1`（`~/.npm-global` 安装，全局 CLI `dsh`）。
+- **Wine / win32**：Wine（`~/.wine-nodetest` 前缀）+ Windows Node `24.21.0`（`C:\node24\node.exe`）+ Windows DSH `0.2.2-rc.1`（`C:\npm-global-022\node_modules\@deepseek-ai\dsh`，与原有 `C:\npm-global` 的 0.2.1-rc.2 并存）。
 
-## 一、Linux
+> Wine 侧全部跑在**独立 DSH_HOME**（`Z:\home\...\.scratch-pwsh\wine022\*`）里，没有碰机器上另一个正在使用的 DSH 实例与其 `C:\dsh-test-home`。
+
+## 零、DSH 0.2.2-rc.1 回归（v0.1.2）
+
+`0.2.1-rc.2 → 0.2.2-rc.1` 是跨 minor 升级。先对两个版本安装产物逐行 diff，再实跑。
+
+### 1. 上游 API 核对（均未变）
+
+| 依赖点 | 0.2.1-rc.2 → 0.2.2-rc.1 |
+|---|---|
+| `ctx.tools.restrict()` / `view()` / `get()` | 函数体逐字相同：unknown-tool 校验、scope 要求、`run_code` 保留名规则都不变 |
+| `agent/created` | 仍是 `await ctx.serial(carrier, "agent/created", { agent, source, signal })` —— 串行派发、监听器异常仍会让会话创建失败（插件的 try/catch 兜底仍然必要） |
+| `agent/disposed` / `agents.list()` / `tools/change` | 未变 |
+| 监听器 `{ global: true }` | cordis 4.1.0 仍支持 |
+| `dsh-base` 的 `tool-pwsh` 行 | 原样：`disabled: !!js process.platform !== 'win32'` |
+| web 预设 `standard` / `cordis` / `ptc` 的 `tool-pwsh`、`minimal` 的 `persistent-pwsh` | 行 id、包名、平台条件均原样 |
+| 工具名与提示词小节 | 仍为 `pwsh`；`tool:pwsh` 的「非零退出码」小节文案未变 |
+| 0.2.2 新增清单字段 `dsh.bundle.platforms` / `listedByDefault` | 均可选、默认不限平台/默认可见，本插件无需声明 |
+
+结论：代码不需要改；v0.1.2 只做版本、验证记录与文档修复。
+
+### 2. Linux（0.2.2-rc.1）
+
+| 验证 | 命令 | 结果 |
+|---|---|---|
+| 单元测试 | `node --test tests/plugin.test.mjs` | `tests 12 / pass 12 / fail 0` |
+| 真实 DSH 冒烟 | `node scripts/smoke.mjs` | 4/4（control=`present`，plugin/no-tool/host-row=`absent`） |
+| 目录安装 | `dsh plugin --profile web add <repo>` | 成功，`dsh.profile.bundles` 自动入栈 |
+| 组合树（headless） | `dsh --profile headless --dump-config` | `# == @deepseek-ai/dsh-base, patched by dsh-disable-pwsh` + `- id: tool-pwsh … disabled: true` + 末尾 `# == dsh-disable-pwsh` |
+| 组合树（web） | `dsh --profile web --dump-config \| tail -3` | 末尾是 `# == dsh-disable-pwsh` 与插件行。`tool-pwsh` 行在 bundle 层已被 `@deepseek-ai/dsh-web-app` 置为 `disabled: true`，本插件 patch 写入相同值 → 组合树**不记录归属**（属预期；v0.1.1 README 的断言在此不成立，v0.1.2 已修正文档） |
+| 安装态运行时 | 临时 DSH_HOME 装插件 + 探针 + 假 `pwsh` | `[probe] agent=session-… pwsh=absent` |
+| tarball 链路 | `npm pack` → `dsh plugin add *.tgz` | 41.2 kB / 12 文件；组合树与目录安装一致 |
+| 实机截图 | `node scripts/screenshot.mjs --port 3099` | 两张图生成，脚本内断言通过（0.2.2 UI 下重拍） |
+
+### 3. Wine / win32（0.2.2-rc.1，真实 `pwsh` 工具）
+
+Windows 版 DSH 0.2.2-rc.1 装在 `C:\npm-global-022`（与原有 `C:\npm-global` 的 0.2.1-rc.2 并存）；每条命令用独立 `DSH_HOME`，经 `cmd /c` 重定向到文件（Wine 下 stdout 直连 Linux 管道会 `EBADF`）：
+
+| 用例 | `--patch` 内容 | 探针结果 | 含义 |
+|---|---|---|---|
+| 对照 | 只插探针 | `pwsh=present` | win32 上 0.2.2 默认确实有真实 `pwsh` 工具 |
+| 插件行 | 插件 `index.js` 行 + 探针 | `pwsh=absent` | 运行时 `restrict` 移除了真实工具 |
+| 声明式等效 | `- id: tool-pwsh, disabled: true` + 探针 | `pwsh=absent` | bundle patch 半边生效 |
+| 无工具不报错 | 行禁用 + 插件行 + 探针 | `pwsh=absent`，无异常 | unknown-tool 不会拖垮会话创建 |
+| 手工安装（默认） | profile 放包 + bundles 列表 + 探针 | `pwsh=absent` | 安装形态下声明式生效（组合树带 `patched by dsh-disable-pwsh`） |
+| 手工安装 + 强制启用 | 同上 + `disabled: false` | `pwsh=absent` | 安装形态下运行时半边生效 |
+
+`dsh plugin add` 在 win32 上**仍然失败**（pnpm 被拼成 `C:\node24\\node_modules\pnpm\pnpm`），0.2.2-rc.1 未修复；README 的手工安装兜底在 0.2.2-rc.1 上按上面两条用例验证有效。
+
+## 一、Linux（历史：DSH 0.2.1-rc.2，v0.1.0 / v0.1.1）
 
 ### 1. 单元测试
 
@@ -48,10 +97,11 @@ node scripts/screenshot.mjs
 - `docs/images/plugin-inventory-tool-pwsh.png`：设置 → 内置插件 → 展开 `tool-pwsh` 卡片（脚本断言页面里确实有 `@deepseek-ai/dsh-tool-pwsh`、`完整名称`、`禁用条件`）。
 - `docs/images/plugin-installed.png`：侧栏「插件」面板 → 已安装插件 → 本插件卡片。
 
-两个坑（脚本里都处理了，重跑可复现）：
+三个坑（脚本里都处理了，重跑可复现）：
 
 1. dsh 打印的 URL 自带结尾斜杠，拼 `?token=` 时再斜杠一次会变成 `//?token=…`，服务端当成未知路径直接 400 —— 用 `new URL('?token=…', baseUrl)` 拼。
 2. 本机环境挂着 SOCKS 代理，Chrome 会把 `127.0.0.1` 也丢给代理 → `ERR_HTTP_RESPONSE_CODE_FAILURE` —— 启动参数加 `--no-proxy-server`。
+3. 「预览版说明」弹窗可能比页面骨架晚挂载，只点一次「继续」会点空、弹窗继续挡住账号菜单与「设置」按钮（实测偶发超时）—— 脚本改成「连续一段时间看不到『继续』才算关闭」，并在重试账号菜单前再清一次。
 
 ### 4. 真实安装（`dsh plugin add`）
 
@@ -69,13 +119,13 @@ DSH_HOME=/tmp/inst-test dsh --profile headless --dump-config | grep -A2 tool-pws
   disabled: true
 
 # == dsh-disable-pwsh
-- id: disable-pwsh
+- id: dsh-disable-pwsh
   name: dsh-disable-pwsh
 ```
 
 再用探针 + 假工具跑一次：`[probe] agent=session-… pwsh=absent`（说明**安装后的 bundle** 里插件行真的激活并移除了工具）。
 
-## 二、Wine / win32（真实 `pwsh` 工具）
+## 二、Wine / win32（历史：DSH 0.2.1-rc.2，真实 `pwsh` 工具）
 
 Wine 下 `node` 把 stdout/stderr 接到 Linux 管道会 `EBADF`，所以经 `cmd /c` 重定向到文件。headless 不走端口、不碰对方 DSH_HOME：
 
@@ -106,7 +156,7 @@ win32 上 `@deepseek-ai/dsh-base` 的 `tool-pwsh` 行本身是启用的（条件
   dsh.profile.bundles: [ ..., "dsh-disable-pwsh" ]
 ```
 
-## 三、对抗性代码复核
+## 三、对抗性代码复核（历史：v0.1.1）
 
 另起一轮只读复核（逐行对照 `dsh-tools` / `dsh-scope` / `cordis` 源码），结论与处理：
 
@@ -124,5 +174,6 @@ win32 上 `@deepseek-ai/dsh-base` 的 `tool-pwsh` 行本身是启用的（条件
 
 ## 四、未覆盖
 
-- **web 预设平面的真机 UI 验证**：需要浏览器/Web 会话驱动（`/api/remote.mux` 是 WebSocket RPC），本次未自动化。预设工具注册在 agent 作用域的祖先层，`tools.restrict` 的过滤发生在继承层（`view()` 对 global 与祖先层用同一套 `layers.every(admits)` 判定），与已验证的宿主平面是同一个代码路径；手工验证方式见 README「验证」第 3 步 + 在 Web 新会话里看模型工具列表。
-- DSH `0.2.0.x`：未测，`engines.dsh` 因此只声明 `>=0.2.1-rc.2 <0.3.0-0`。
+- **web 预设平面的真机 UI 验证**：仍未自动化（需要浏览器/Web 会话驱动，`/api/remote.mux` 是 WebSocket RPC）。预设工具注册在 agent 作用域的祖先层，`tools.restrict` 的过滤发生在继承层（`view()` 对 global 与祖先层用同一套 `layers.every(admits)` 判定），与已验证的宿主平面是同一个代码路径；手工验证方式见 README「验证」第 3 步 + 在 Web 新会话里看模型工具列表。0.2.2-rc.1 上只做了源码级核对（见 §零.1）。
+- **win32 的 Web 预设平面**：Wine 里没有跑浏览器；0.2.2-rc.1 只验了 headless（宿主平面）与安装形态，预设平面依赖上面的手工方式。
+- DSH `0.2.0.x`：未测，`engines.dsh` 因此只声明 `>=0.2.1-rc.2 <0.3.0-0`；`0.2.2-rc.1` 已实测（见 §零）。
